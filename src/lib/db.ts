@@ -30,6 +30,20 @@ export async function testConnection() {
   }
 }
 
+// Log system events function
+export async function logSystemEvent(type: string, message: string, meta?: any) {
+  try {
+    await pool.execute(
+      'INSERT INTO logs (type, message, meta, created_at) VALUES (?, ?, ?, NOW())',
+      [type, message, meta ? JSON.stringify(meta) : null]
+    );
+    console.log(`📝 System log: [${type}] ${message}`);
+  } catch (error) {
+    console.error('Failed to log system event:', error);
+    // Don't throw error to prevent breaking the main functionality
+  }
+}
+
 // Export the pool as default and named export
 export const db = pool;
 export default pool;
