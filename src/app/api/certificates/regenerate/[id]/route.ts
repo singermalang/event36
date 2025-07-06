@@ -1,21 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import db from '@/lib/db';
-import { generateCertificateWithTemplate } from '@/lib/certificate-generator';
+import { db } from '@/lib/db';
+import { generateCertificateFromTemplate } from '@/lib/certificate-generator';
 
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const certificateId = params.id;
+    const certificateId = parseInt(params.id);
 
     // Get certificate and participant data
     const [certificateRows] = await db.execute(`
-      SELECT 
-        c.*,
-        p.name, p.email, p.phone, p.address,
-        t.token,
-        e.id as event_id, e.name as event_name, e.start_time, e.end_time
+      SELECT c.*, p.name, p.email, e.name as event_name, e.start_time, e.location
       FROM certificates c
       JOIN participants p ON c.participant_id = p.id
       JOIN tickets t ON p.ticket_id = t.id
@@ -23,88 +19,57 @@ export async function POST(
       WHERE c.id = ?
     `, [certificateId]);
 
-    if (!certificateRows || (certificateRows as any[]).length === 0) {
-      return NextResponse.json(
-        { error: 'Certificate not found' },
-        { status: 404 }
-      );
+    if (!Array.isArray(certificateRows) || certificateRows.length === 0) {
+      return NextResponse.json({ error: 'Certificate not found' }, { status: 404 });
     }
 
-    const certificate = (certificateRows as any[])[0];
+    const certificate = certificateRows[0] as any;
 
-    // Get template data (check both single and multi templates)
-    let template = null;
-    
-    // First try multi-template
-    if (certificate.template_id) {
-      const [multiTemplateRows] = await db.execute(`
-        SELECT * FROM certificate_templates_multi 
-        WHERE event_id = ? AND template_index = ?
-      `, [certificate.event_id, certificate.template_id]);
-      
-      if (multiTemplateRows && (multiTemplateRows as any[]).length > 0) {
-        const templateData = (multiTemplateRows as any[])[0];
-        template = {
-          image: templateData.template_path,
-          elements: JSON.parse(templateData.template_fields || '[]')
-        };
-      }
-    }
-    
-    // If not found, try single template
-    if (!template) {
-      const [singleTemplateRows] = await db.execute(`
-        SELECT * FROM certificate_templates 
-        WHERE event_id = ?
-      `, [certificate.event_id]);
-      
-      if (singleTemplateRows && (singleTemplateRows as any[]).length > 0) {
-        const templateData = (singleTemplateRows as any[])[0];
-        template = {
-          image: templateData.template_path,
-          elements: JSON.parse(templateData.template_fields || '[]')
-        };
-      }
+    // Get template for the event
+    const [templateRows] = await db.execute(`
+      SELECT template_path FROM certificate_templates 
+      WHERE event_id = (
+        SELECT e.id FROM events e
+        JOIN tickets t ON e.id = t.event_id
+        JOIN participants p ON t.id = p.ticket_id
+        WHERE p.id = ?
+      )
+      LIMIT 1
+    `, [certificate.participant_id]);
+
+    let templatePath = '/templates/default_certificate.json';
+    if (Array.isArray(templateRows) && templateRows.length > 0) {
+      templatePath = (templateRows[0] as any).template_path;
     }
 
-    if (!template) {
-      return NextResponse.json(
-        { error: 'Certificate template not found' },
-        { status: 404 }
-      );
-    }
-
-    // Prepare participant data with uppercase name
-    const participantData = {
-      ...certificate,
-      name: certificate.name.toUpperCase(), // Auto uppercase
-      certificate_number: `CERT-${certificate.token}-${certificate.template_id || 1}`,
-      date: new Date().toLocaleDateString('id-ID', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      })
+    // Prepare certificate data
+    const certificateData = {
+      participantName: certificate.name,
+      eventName: certificate.event_name,
+      eventDate: new Date(certificate.start_time).toLocaleDateString(),
+      eventLocation: certificate.location
     };
 
     // Generate new certificate
-    const certificatePath = await generateCertificateWithTemplate(
-      template,
-      participantData,
-      certificate.event_id,
-      `regenerated_${Date.now()}`
+    const outputPath = `/public/certificates/cert_${certificate.name.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+    const fullOutputPath = process.cwd() + outputPath;
+
+    await generateCertificateFromTemplate(
+      process.cwd() + templatePath,
+      certificateData,
+      fullOutputPath
     );
 
-    // Update certificate record
-    await db.execute(`
-      UPDATE certificates 
-      SET path = ?, sent = FALSE, created_at = NOW()
-      WHERE id = ?
-    `, [certificatePath, certificateId]);
+    // Update certificate path in database
+    await db.execute(
+      'UPDATE certificates SET path = ?, created_at = NOW() WHERE id = ?',
+      [outputPath, certificateId]
+    );
 
     return NextResponse.json({
       success: true,
       message: 'Certificate regenerated successfully',
-      path: certificatePath
+      path: outputPath
     });
 
   } catch (error) {

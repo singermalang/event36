@@ -7,21 +7,21 @@ export async function GET(
 ) {
   try {
     const eventId = parseInt(params.id);
-    
-    if (isNaN(eventId)) {
-      return NextResponse.json({ error: 'Invalid event ID' }, { status: 400 });
+
+    // Get event details
+    const [eventRows] = await db.execute(
+      'SELECT * FROM events WHERE id = ?',
+      [eventId]
+    );
+
+    if (!Array.isArray(eventRows) || eventRows.length === 0) {
+      return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Get certificate templates for this event
-    const [templates] = await db.execute(`
-      SELECT template_index, template_path, template_fields, template_size
-      FROM certificate_templates_multi 
-      WHERE event_id = ? 
-      ORDER BY template_index ASC
-    `, [eventId]);
+    const event = eventRows[0];
 
     // Get participants with their certificate status
-    const [participants] = await db.execute(`
+    const [participantRows] = await db.execute(`
       SELECT 
         p.id,
         p.name,
@@ -39,21 +39,37 @@ export async function GET(
       JOIN tickets t ON p.ticket_id = t.id
       LEFT JOIN certificates c ON p.id = c.participant_id
       WHERE t.event_id = ? AND t.is_verified = TRUE
-      ORDER BY p.registered_at ASC
+      ORDER BY p.registered_at DESC
     `, [eventId]);
+
+    const participants = Array.isArray(participantRows) ? participantRows : [];
+
+    // Get available templates
+    const [templateRows] = await db.execute(
+      'SELECT * FROM certificate_templates_multi WHERE event_id = ? ORDER BY template_index',
+      [eventId]
+    );
+
+    const templates = Array.isArray(templateRows) ? templateRows : [];
 
     return NextResponse.json({
       success: true,
-      templates: templates || [],
-      participants: participants || []
+      event,
+      participants,
+      templates,
+      stats: {
+        totalParticipants: participants.length,
+        withCertificates: participants.filter((p: any) => p.certificate_id).length,
+        withoutCertificates: participants.filter((p: any) => !p.certificate_id).length,
+        templateCount: templates.length
+      }
     });
 
   } catch (error) {
     console.error('Error fetching multi-template data:', error);
-    return NextResponse.json({
-      success: false,
-      error: 'Failed to fetch data',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to fetch data' },
+      { status: 500 }
+    );
   }
 }

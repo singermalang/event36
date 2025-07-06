@@ -1,42 +1,35 @@
-import mysql from 'mysql2/promise'
+import mysql from 'mysql2/promise';
 
-// Create connection pool for better performance
-const pool = mysql.createPool({
+const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '3306'),
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || 'bismillah123',
   database: process.env.DB_NAME || 'event_management',
+  port: parseInt(process.env.DB_PORT || '3306'),
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-})
+  acquireTimeout: 60000,
+  timeout: 60000,
+  reconnect: true
+};
 
-// Test database connection
-export async function testConnection(): Promise<boolean> {
+// Create connection pool
+const pool = mysql.createPool(dbConfig);
+
+// Test connection function
+export async function testConnection() {
   try {
-    console.log('🔍 Testing MySQL connection...')
-    const connection = await pool.getConnection()
-    await connection.ping()
-    connection.release()
-    console.log('✅ MySQL connection successful')
-    return true
+    const connection = await pool.getConnection();
+    console.log('✅ Database connected successfully');
+    connection.release();
+    return true;
   } catch (error) {
-    console.error('❌ MySQL connection failed:', error)
-    return false
+    console.error('❌ Database connection failed:', error);
+    return false;
   }
 }
 
-// Export the pool as default
-export default pool
-
-export async function logSystemEvent(type: string, message: string, meta?: any) {
-  try {
-    await pool.execute(
-      'INSERT INTO logs (type, message, meta) VALUES (?, ?, ?)',
-      [type, message, meta ? JSON.stringify(meta) : null]
-    )
-  } catch (err) {
-    console.error('Failed to log system event:', err)
-  }
-}
+// Export the pool as default and named export
+export const db = pool;
+export default pool;
